@@ -27,14 +27,15 @@ target_include_directories(VideoPLAYER PRIVATE src)
 target_compile_definitions(VideoPLAYER PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_compile_options(VideoPLAYER PRIVATE /W4 /permissive- /utf-8 /sdl /guard:cf /guard:ehcont)
 # List the libraries explicitly instead of CMake's defaults (which import ole32.dll). onecore_apiset comes
-# last, so it only supplies the COM functions, which then bind straight to combase.dll.
+# last, so it only supplies the COM and registry functions, which then bind straight to combase.dll and
+# kernelbase.dll.
 set(CMAKE_CXX_STANDARD_LIBRARIES "")
-target_link_libraries(VideoPLAYER PRIVATE delayimp kernel32 user32 gdi32 imm32 dwmapi advapi32 shell32 comdlg32
+target_link_libraries(VideoPLAYER PRIVATE delayimp kernel32 user32 gdi32 imm32 dwmapi shell32 comdlg32
                       oleaut32 uuid mfplat mfreadwrite mfuuid avrt d3d11 dxgi dcomp d2d1 dwrite dxguid onecore_apiset)
 # The file picker and dropped files load their DLLs on first use, text drawing once the window lays out, and the
 # reader of the seek bar previews once a video opens.
 target_link_options(VideoPLAYER PRIVATE /DELAYLOAD:comdlg32.dll /DELAYLOAD:shell32.dll /DELAYLOAD:d2d1.dll
-                    /DELAYLOAD:dwrite.dll /DELAYLOAD:advapi32.dll /DELAYLOAD:mfreadwrite.dll)
+                    /DELAYLOAD:dwrite.dll /DELAYLOAD:mfreadwrite.dll)
 # Control-flow guard, shadow stack with checked exception continuations, and DLL imports from System32 only
 # (no planted DLLs next to the exe).
 target_link_options(VideoPLAYER PRIVATE /GUARD:CF /GUARD:EHCONT /CETCOMPAT /DEPENDENTLOADFLAG:0x800)
