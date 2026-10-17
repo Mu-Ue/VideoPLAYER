@@ -734,6 +734,7 @@ void PlayerLoop() {
     bool synced = false, failed = false, catchingUp = false;
     double ease = 0, lastClock = -1;
     LONGLONG lastClockAt = 0;
+    float applied = -1;  // the volume the last frames handed to the output ended at, or -1
     const auto stop = [&] {
         if (out.started) out.Close();
         synced = false;
@@ -855,14 +856,23 @@ void PlayerLoop() {
         BYTE* buffer = nullptr;
         if (room && SUCCEEDED(out.render->GetBuffer(room, &buffer))) {
             float* to = reinterpret_cast<float*>(buffer);
-            if (gain <= 1) {
+            // A new volume ramps in across the frames rather than jumping, which would click.
+            const float from = applied < 0 ? gain : applied, step = (gain - from) / float(room);
+            const bool boosted = std::max(from, gain) > 1;
+            applied = gain;
+            if (!boosted && from == gain) {
                 for (size_t i = 0; i < size_t(room) * c; ++i) to[i] = made[i] * gain;
-            } else {  // boosted: peaks bend smoothly toward full scale rather than clipping
+            } else {  // boosted, peaks bend smoothly toward full scale rather than clipping
                 constexpr float knee = 0.9f;
-                for (size_t i = 0; i < size_t(room) * c; ++i) {
-                    const float y = made[i] * gain;
-                    const float a = std::abs(y);
-                    to[i] = a <= knee ? y : std::copysign(knee + (1 - knee) * std::tanh((a - knee) / (1 - knee)), y);
+                for (size_t f = 0; f < room; ++f) {
+                    const float level = from + step * float(f + 1);
+                    for (size_t k = f * c; k < (f + 1) * c; ++k) {
+                        const float y = made[k] * level;
+                        const float a = std::abs(y);
+                        to[k] = !boosted || a <= knee
+                                    ? y
+                                    : std::copysign(knee + (1 - knee) * std::tanh((a - knee) / (1 - knee)), y);
+                    }
                 }
             }
             out.render->ReleaseBuffer(room, 0);
