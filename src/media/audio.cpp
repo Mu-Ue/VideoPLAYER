@@ -157,6 +157,7 @@ void Add(double time, const float* f, size_t frames, UINT32 rate, UINT32 channel
 // uncompressed. A track it can't decode plays as silence, so it still keeps time.
 struct Decoder {
     ComPtr<IMFTransform> mft;
+    ComPtr<IMFActivate> activate;  // mft's, which shuts it down
     GUID subtype = GUID_NULL;  // of what is converted, MFAudioFormat_Float or MFAudioFormat_PCM; GUID_NULL if silent
     UINT32 rate = 0, channels = 0, bits = 0;
     bool provides = false;     // the decoder makes its own output samples
@@ -169,6 +170,8 @@ struct Decoder {
     void Close() {
         if (mft) mft->ProcessMessage(MFT_MESSAGE_NOTIFY_END_STREAMING, 0);
         mft.Reset();
+        if (activate) activate->ShutdownObject();
+        activate.Reset();
         output.Reset();
         subtype = GUID_NULL;
         next = -1;
@@ -261,10 +264,13 @@ struct Decoder {
                                     MFT_ENUM_FLAG_SYNCMFT | MFT_ENUM_FLAG_LOCALMFT | MFT_ENUM_FLAG_SORTANDFILTER,
                                     &input, nullptr, &found, &count))) {
                 for (UINT32 i = 0; i < count; ++i) {
-                    if (!mft && SUCCEEDED(found[i]->ActivateObject(IID_PPV_ARGS(&mft))) &&
-                        (FAILED(mft->SetInputType(0, type.Get(), 0)) || !SetOutput())) {
-                        mft.Reset();
-                        found[i]->ShutdownObject();
+                    if (!mft && SUCCEEDED(found[i]->ActivateObject(IID_PPV_ARGS(&mft)))) {
+                        if (FAILED(mft->SetInputType(0, type.Get(), 0)) || !SetOutput()) {
+                            mft.Reset();
+                            found[i]->ShutdownObject();
+                        } else {
+                            activate = found[i];
+                        }
                     }
                     found[i]->Release();
                 }
