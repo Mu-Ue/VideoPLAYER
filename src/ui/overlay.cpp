@@ -56,6 +56,9 @@ struct {
     ComPtr<IDWriteTextFormat> menu, time, title, icons, number, header, row, check;
     ComPtr<IDWriteInlineObject> ellipsis, rowEllipsis;
     ComPtr<IDWriteTypography> tabular;  // digits all one width, null until first used
+    // The icon popped up in the middle, for one size, which only changes with the window's.
+    ComPtr<IDWriteTextFormat> flash;
+    UINT flashSize = 0;
 } g;
 
 // The shared DirectWrite factory, which any thread can use.
@@ -647,9 +650,11 @@ void DrawControls(IDCompositionDevice* dcomp, IDCompositionVisual* visual, UINT 
 void DrawFlash(IDCompositionDevice* dcomp, IDCompositionVisual* visual, UINT size, std::wstring_view glyph,
                bool slash) {
     const float s = float(size);
-    const ComPtr<IDWriteTextFormat> icon =
-        size && Init() ? CreateFormat(IconFont(), s * 0.42f, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_TEXT_ALIGNMENT_CENTER)
-                       : nullptr;
+    if (size != g.flashSize && size && Init()) {
+        g.flash = CreateFormat(IconFont(), s * 0.42f, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_TEXT_ALIGNMENT_CENTER);
+        g.flashSize = g.flash ? size : 0;
+    }
+    const ComPtr<IDWriteTextFormat> icon = size == g.flashSize ? g.flash : nullptr;
     if (!icon) {
         visual->SetContent(nullptr);
         return;
