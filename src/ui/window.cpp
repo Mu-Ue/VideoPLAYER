@@ -231,7 +231,7 @@ std::wstring TrackLabel(const Track& track) {
 // The language of "Movie.en.srt", else the file name without its extension.
 std::wstring SubtitleFileLabel(const std::wstring& path) {
     std::wstring stem = FileName(path);
-    stem.resize(stem.size() - 4);
+    stem.resize(std::min(stem.size(), stem.find_last_of(L'.')));
     if (const size_t dot = stem.find_last_of(L'.'); dot != std::wstring::npos) {
         if (std::wstring language = LanguageName(stem.substr(dot + 1)); !language.empty()) return language;
     }
