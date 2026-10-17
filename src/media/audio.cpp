@@ -230,6 +230,11 @@ struct Decoder {
             wave.Format.cbSize = sizeof(wave) - sizeof(WAVEFORMATEX);
             wave.Samples.wValidBitsPerSample = 32;
             wave.dwChannelMask = type ? MFGetAttributeUINT32(type, MF_MT_AUDIO_CHANNEL_MASK, 0) : 0;
+            // None given: the usual layout for the count, 3.0 to 7.1, so each channel goes to its usual speaker.
+            constexpr DWORD kLayouts[] = {KSAUDIO_SPEAKER_STEREO | SPEAKER_FRONT_CENTER, KSAUDIO_SPEAKER_QUAD,
+                                          KSAUDIO_SPEAKER_5POINT1 & ~SPEAKER_LOW_FREQUENCY, KSAUDIO_SPEAKER_5POINT1,
+                                          KSAUDIO_SPEAKER_5POINT1 | SPEAKER_BACK_CENTER, KSAUDIO_SPEAKER_7POINT1_SURROUND};
+            if (!wave.dwChannelMask && channels <= 8) wave.dwChannelMask = kLayouts[channels - 3];
             wave.SubFormat = KSDATAFORMAT_SUBTYPE_IEEE_FLOAT;
             size = sizeof(wave);
         }
