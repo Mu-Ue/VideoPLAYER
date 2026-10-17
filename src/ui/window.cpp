@@ -196,6 +196,9 @@ std::wstring LanguageName(std::wstring code) {
     for (const auto& b : kBibliographic) {
         if (CompareStringOrdinal(code.c_str(), 3, b[0], 3, TRUE) == CSTR_EQUAL) code = b[1];
     }
+    // Finding one goes through all the system's locales, so each is looked up once.
+    static std::unordered_map<std::wstring, std::wstring> found;
+    if (const auto it = found.find(code); it != found.end()) return it->second;
     struct Find {
         const wchar_t* code;
         wchar_t locale[LOCALE_NAME_MAX_LENGTH];
@@ -212,9 +215,10 @@ std::wstring LanguageName(std::wstring code) {
             return TRUE;
         },
         LOCALE_NEUTRALDATA, LPARAM(&find), nullptr);
-    return find.locale[0] && GetLocaleInfoEx(find.locale, LOCALE_SLOCALIZEDDISPLAYNAME, name, int(std::size(name)))
-               ? name
-               : L"";
+    return found[code] = find.locale[0] && GetLocaleInfoEx(find.locale, LOCALE_SLOCALIZEDDISPLAYNAME, name,
+                                                          int(std::size(name)))
+                             ? name
+                             : L"";
 }
 
 // "English", "English – Commentary", "Commentary" or "Unknown".
