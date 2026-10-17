@@ -350,6 +350,7 @@ struct Decoder {
             LONGLONG duration = 0;
             if (!timed) return true;
             if (FAILED(sample->GetSampleDuration(&duration)) || duration <= 0) duration = 200000;
+            duration = std::min(duration, LONGLONG(kAhead * 1e7));  // the file's own, so bounded like gaps
             floats.assign(size_t(MFllMulDiv(duration, rate, 10000000, 0)) * channels, 0.0f);
             Add(at / 1e7, floats.data(), floats.size() / channels, rate, channels);
             return true;
