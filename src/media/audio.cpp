@@ -36,10 +36,14 @@ constexpr double kSegment = 0.02;       // seconds of the time stretch's segment
 constexpr double kSearch = 0.008;       // seconds it looks either way for the best place to join the next segment
 
 LONGLONG Now() {  // in 100 ns units
-    LARGE_INTEGER now, frequency;
+    static const LONGLONG frequency = [] {
+        LARGE_INTEGER f;
+        QueryPerformanceFrequency(&f);
+        return f.QuadPart;
+    }();
+    LARGE_INTEGER now;
     QueryPerformanceCounter(&now);
-    QueryPerformanceFrequency(&frequency);
-    return MFllMulDiv(now.QuadPart, 10000000, frequency.QuadPart, 0);
+    return MFllMulDiv(now.QuadPart, 10000000, frequency, 0);
 }
 
 // The sound decoded ahead, which the decoder adds to and the player takes from, and the stream it comes from; all

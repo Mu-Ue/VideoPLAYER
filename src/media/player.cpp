@@ -617,11 +617,15 @@ bool PictureTime(double& seconds, LONGLONG& qpc) {
     IMFMediaEngineEx* engine = g.engine.Get();
     const bool moving = !engine->IsPaused() && !engine->IsSeeking() && !engine->IsEnded() &&
                         engine->GetReadyState() >= MF_MEDIA_ENGINE_READY_HAVE_FUTURE_DATA;
-    LARGE_INTEGER now, frequency;
+    static const LONGLONG frequency = [] {
+        LARGE_INTEGER f;
+        QueryPerformanceFrequency(&f);
+        return f.QuadPart;
+    }();
+    LARGE_INTEGER now;
     seconds = engine->GetCurrentTime();
     QueryPerformanceCounter(&now);
-    QueryPerformanceFrequency(&frequency);
-    qpc = MFllMulDiv(now.QuadPart, 10000000, frequency.QuadPart, 0);
+    qpc = MFllMulDiv(now.QuadPart, 10000000, frequency, 0);
     return moving;
 }
 
