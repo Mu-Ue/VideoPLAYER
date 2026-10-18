@@ -1989,5 +1989,7 @@ bool StartPlayer(HINSTANCE instance, const std::vector<std::wstring>& files, int
     }
     // The window shows when the video's size is known (LOADEDMETADATA) so it opens at the right size.
     SetTimer(g.hwnd, kShowTimer, kShowFallbackMs, nullptr);
+    // Meanwhile, Direct2D and the text formats are set up by drawing the menu bar, which then only redraws.
+    DrawMenuBar();
     return true;
 }
