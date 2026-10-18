@@ -187,6 +187,10 @@ std::wstring LanguageName(std::wstring code) {
                    ? name
                    : L"";
     }
+    // Undetermined, several, uncoded and no language name none, and finding that would go through all the locales.
+    for (const wchar_t* none : {L"und", L"mul", L"mis", L"zxx"}) {
+        if (CompareStringOrdinal(code.c_str(), 3, none, 3, TRUE) == CSTR_EQUAL) return {};
+    }
     // Windows knows the terminology codes, so map the bibliographic ones that differ.
     static const wchar_t* const kBibliographic[][2] = {
         {L"alb", L"sqi"}, {L"arm", L"hye"}, {L"baq", L"eus"}, {L"bur", L"mya"}, {L"chi", L"zho"},
