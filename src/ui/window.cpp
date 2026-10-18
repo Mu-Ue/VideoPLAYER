@@ -114,6 +114,7 @@ struct Window {
     int hotColumn = -1, hotRow = -1;
     std::wstring osdText;
     bool osdCentered = false;  // at the top center rather than the top left
+    bool subtitlesHint = false;  // "Subtitles available" waits for the window to show
     Control hot = kNone;    // under the mouse
     Control menuOpen = kNone;  // kFile or kSubs while its menu is showing
     std::wstring title;     // the video's file name
@@ -991,6 +992,7 @@ void ShowMainWindow() {
     if (IsWindowVisible(g.hwnd)) return;
     if (!g.sized) PlaceWindow();
     ShowWindow(g.hwnd, g.showCmd);
+    if (std::exchange(g.subtitlesHint, false)) ShowOsd(L"Subtitles available (S)");
     Wake();
 }
 
@@ -1121,7 +1123,12 @@ bool OpenVideoFile(const std::wstring& path, bool started) {
     AddSidecarSubtitles(path);
     ShowSubtitles();
     HideOsd();
-    if (HasSubtitles() && g.tracks[0].read) ShowOsd(L"Subtitles available (S)");
+    // Drawn once the window shows: the first OSD is slow to draw, and would hold up the video's metadata.
+    g.subtitlesHint = HasSubtitles() && g.tracks[0].read;
+    if (g.subtitlesHint && IsWindowVisible(g.hwnd)) {
+        g.subtitlesHint = false;
+        ShowOsd(L"Subtitles available (S)");
+    }
     SetWindowTextW(g.hwnd, FileName(path).c_str());
     g.title = FileName(path);
     g.title = g.title.substr(0, g.title.find_last_of(L'.'));
