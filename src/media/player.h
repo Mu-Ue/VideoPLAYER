@@ -25,7 +25,7 @@ constexpr UINT WM_APP_PREVIEW = WM_APP + 5;
 constexpr UINT WM_APP_AUDIO_TRACKS = WM_APP + 8;
 
 // Starts what opening the first video, if not empty, needs that can be done before InitPlayer, on threads of its
-// own. Call once, first.
+// own: also the GPU device. Call once, first.
 void PrepareVideo(const std::wstring& path);
 // The first video's size, from what PrepareVideo started, if it has it already; 0 x 0 if not. The engine's
 // VideoSize, once its metadata loads, can differ.

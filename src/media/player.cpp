@@ -144,6 +144,9 @@ struct {
     ComPtr<IMFSeekInfo> openedKeyFrames;
     ComPtr<IMFSeekInfo> keyFrames;
     bool started = false;  // MFStartup succeeded
+    // Making the device, which takes long the first time, on a thread of its own from PrepareVideo; and its outcome.
+    PTP_WORK deviceWork = nullptr;
+    HRESULT deviceMade = E_FAIL;
     // The swap chain, guarded by lock: the render thread presents into it and the window thread sizes it.
     SRWLOCK lock = SRWLOCK_INIT;
     ComPtr<IDXGISwapChain1> chain;
@@ -881,13 +884,22 @@ void PreviewLoop() {
 
 void PrepareVideo(const std::wstring& path) {
     PrepareSourceExtension(path.empty() || IsDevicePath(path) ? nullptr : path.c_str());
+    g.deviceWork = CreateThreadpoolWork([](PTP_CALLBACK_INSTANCE, void*, PTP_WORK) { g.deviceMade = CreateDevice(); },
+                                        nullptr, nullptr);
+    if (g.deviceWork) SubmitThreadpoolWork(g.deviceWork);
 }
 
 SIZE PreparedVideoSize() { return PreparedPictureSize(); }
 
 bool InitPlayer(HWND hwnd) {
     g.notify.hwnd = g.textNotify.hwnd = hwnd;
-    if (FAILED(CreateDevice())) return false;
+    if (g.deviceWork) {
+        WaitForThreadpoolWorkCallbacks(g.deviceWork, FALSE);
+        CloseThreadpoolWork(std::exchange(g.deviceWork, nullptr));
+    } else {
+        g.deviceMade = CreateDevice();
+    }
+    if (FAILED(g.deviceMade)) return false;
     g.started = SUCCEEDED(MFStartup(MF_VERSION, MFSTARTUP_LITE));
     if (!g.started || FAILED(CreateEngines())) return false;
     StartAudio(PictureTime, hwnd, WM_APP_AUDIO_TRACKS);

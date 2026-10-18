@@ -1858,12 +1858,33 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 // The visual tree, and an 8 x 8 black swap chain that is stretched behind the video. The window has no
 // redirection surface, so anything not covered would show through. The UI draws on a device of its own, so it
 // never waits on, or stalls, the engine's decoding and presenting.
+HRESULT CreateDevice() {
+    return D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr, D3D11_CREATE_DEVICE_BGRA_SUPPORT, nullptr, 0,
+                             D3D11_SDK_VERSION, &g.device, nullptr, nullptr);
+}
+
+// Without a video, the device is the first one, which takes long to make, so it is made on a thread of its own
+// while the window is.
+PTP_WORK deviceWork = nullptr;
+HRESULT deviceMade = E_FAIL;
+
+void PrepareDevice() {
+    deviceWork = CreateThreadpoolWork([](PTP_CALLBACK_INSTANCE, void*, PTP_WORK) { deviceMade = CreateDevice(); },
+                                      nullptr, nullptr);
+    if (deviceWork) SubmitThreadpoolWork(deviceWork);
+}
+
 bool InitComposition() {
     ComPtr<IDXGIDevice> dxgi;
     ComPtr<IDXGIAdapter> adapter;
     ComPtr<IDXGIFactory2> factory;
-    HRESULT hr = D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr, D3D11_CREATE_DEVICE_BGRA_SUPPORT,
-                                   nullptr, 0, D3D11_SDK_VERSION, &g.device, nullptr, nullptr);
+    if (deviceWork) {
+        WaitForThreadpoolWorkCallbacks(deviceWork, FALSE);
+        CloseThreadpoolWork(std::exchange(deviceWork, nullptr));
+    } else {
+        deviceMade = CreateDevice();
+    }
+    HRESULT hr = deviceMade;
     ID3D11Device* device = g.device.Get();
     if (SUCCEEDED(hr)) hr = device->QueryInterface(IID_PPV_ARGS(&dxgi));
     if (SUCCEEDED(hr)) hr = DCompositionCreateDevice(dxgi.Get(), IID_PPV_ARGS(&g.dcomp));
@@ -1967,7 +1988,11 @@ bool StartPlayer(HINSTANCE instance, const std::vector<std::wstring>& files, int
     g.showCmd = showCmd;
     const auto video = std::find_if_not(files.begin(), files.end(), IsSubtitleFile);
     const bool hasVideo = video != files.end();
-    if (hasVideo) PrepareVideo(*video);
+    if (hasVideo) {
+        PrepareVideo(*video);
+    } else {
+        PrepareDevice();
+    }
     // The volume of the last run, which the engine takes on when made.
     const Settings saved = LoadSettings();
     g.volume = SetVolume(saved.volume);
