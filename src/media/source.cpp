@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <atomic>
 #include <climits>
+#include <cmath>
 #include <cstring>
 #include <cwchar>
 #include <utility>
@@ -103,6 +104,9 @@ struct Prepared {
 };
 Prepared prepared;
 std::atomic<PTP_WORK> sourceWork = nullptr;
+// The picture size of the source made ahead, width << 32 | height, once it is made; 0 until then or if it has no
+// video. Read without waiting, as the engine takes the source.
+std::atomic<UINT64> preparedSize = 0;
 
 // Waits for a work item PrepareSourceExtension started, if it did; returns whether it did.
 bool Finish(std::atomic<PTP_WORK>& work) {
@@ -384,6 +388,44 @@ GUID MajorType(IMFStreamDescriptor* descriptor) {
     GUID major = GUID_NULL;
     if (SUCCEEDED(descriptor->GetMediaTypeHandler(&handler))) handler->GetMajorType(&major);
     return major;
+}
+
+// The picture size of a source's first video stream as it shows: its display aperture, stretched for non-square
+// pixels and turned upright; 0 x 0 if it has none.
+SIZE PictureSize(IMFMediaSource* source) {
+    ComPtr<IMFPresentationDescriptor> presentation;
+    DWORD count = 0;
+    if (FAILED(source->CreatePresentationDescriptor(&presentation)) ||
+        FAILED(presentation->GetStreamDescriptorCount(&count))) {
+        return {};
+    }
+    for (DWORD i = 0; i < count; ++i) {
+        BOOL selected = FALSE;
+        ComPtr<IMFStreamDescriptor> descriptor;
+        ComPtr<IMFMediaTypeHandler> handler;
+        ComPtr<IMFMediaType> type;
+        if (FAILED(presentation->GetStreamDescriptorByIndex(i, &selected, &descriptor)) ||
+            MajorType(descriptor.Get()) != MFMediaType_Video || FAILED(descriptor->GetMediaTypeHandler(&handler)) ||
+            FAILED(handler->GetCurrentMediaType(&type))) {
+            continue;
+        }
+        UINT32 w = 0, h = 0, n = 0, d = 0;
+        MFVideoArea area;
+        if (SUCCEEDED(type->GetBlob(MF_MT_MINIMUM_DISPLAY_APERTURE, reinterpret_cast<UINT8*>(&area), sizeof(area),
+                                    nullptr))) {
+            w = UINT32(area.Area.cx);
+            h = UINT32(area.Area.cy);
+        } else if (FAILED(MFGetAttributeSize(type.Get(), MF_MT_FRAME_SIZE, &w, &h))) {
+            continue;
+        }
+        if (SUCCEEDED(MFGetAttributeRatio(type.Get(), MF_MT_PIXEL_ASPECT_RATIO, &n, &d)) && n && d && n != d) {
+            w = UINT32(std::lround(double(w) * n / d));
+        }
+        const UINT32 rotation = MFGetAttributeUINT32(type.Get(), MF_MT_VIDEO_ROTATION, 0);
+        if (rotation == 90 || rotation == 270) std::swap(w, h);  // shown upright
+        return {LONG(w), LONG(h)};
+    }
+    return {};
 }
 
 Pcm PcmFormat(IMFStreamDescriptor* descriptor) {
@@ -735,6 +777,11 @@ IMFMediaEngineExtension* SourceExtension() { return &extension; }
 
 LONGLONG LandedFrameTime(LONGLONG time) { return recentFrames.AtOrBefore(time); }
 
+SIZE PreparedPictureSize() {
+    const UINT64 s = preparedSize;
+    return {LONG(s >> 32), LONG(s & 0xffffffff)};
+}
+
 void PrepareSourceExtension(const wchar_t* path) {
     const auto start = [](std::atomic<PTP_WORK>& slot, PTP_WORK_CALLBACK callback) {
         if (const PTP_WORK work = CreateThreadpoolWork(callback, nullptr, nullptr)) {
@@ -752,6 +799,10 @@ void PrepareSourceExtension(const wchar_t* path) {
                                                        MF_FILEFLAGS_NONE, prepared.path.c_str(), &stream))) {
             prepared.shifts = ReadShifts(prepared.path.c_str(), stream.Get());
             CreateSource(prepared.path.c_str(), stream.Get(), prepared.source);
+        }
+        if (prepared.source) {
+            const SIZE s = PictureSize(prepared.source.Get());
+            if (s.cx > 0 && s.cy > 0) preparedSize = UINT64(s.cx) << 32 | UINT32(s.cy);
         }
         if (com) CoUninitialize();
     });

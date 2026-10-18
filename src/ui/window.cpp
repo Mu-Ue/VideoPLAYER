@@ -102,6 +102,7 @@ struct Window {
     // A window opened without a video starts the player with the first one, so until then it holds no engine.
     bool playerTried = false, player = false;
     bool sized = false;  // the window has been sized to a video
+    SIZE guessedSize{};  // the first video's size it showed at before the engine knew it, until the engine does
     std::vector<SubtitleTrack> tracks;  // the video's own first, then files
     int subtitle = -1;                  // the track shown, or -1 for off
     int lastSubtitle = -1;              // the last one shown, which S brings back
@@ -964,8 +965,9 @@ void Layout() {
     g.dcomp->Commit();
 }
 
-// Sizes the window to the video (capped to the work area) or a default size, centered on the active monitor.
-void PlaceWindow() {
+// Sizes the window to a video of size v (capped to the work area), or to a default size for none, centered on the
+// active monitor.
+void PlaceWindow(SIZE v) {
     POINT cursor;
     GetCursorPos(&cursor);
     MONITORINFO mi{sizeof(mi)};
@@ -975,7 +977,7 @@ void PlaceWindow() {
 
     const UINT dpi = GetDpiForWindow(g.hwnd);
     RECT rc{0, 0, MulDiv(960, dpi, 96), MulDiv(540, dpi, 96)};
-    if (const SIZE v = VideoSize(); v.cx > 0 && v.cy > 0) {
+    if (v.cx > 0 && v.cy > 0) {
         const double scale = std::min({1.0, workW * 0.85 / v.cx, workH * 0.85 / v.cy});
         rc.right = std::max(LONG(std::lround(v.cx * scale)), LONG(MulDiv(320, dpi, 96)));
         rc.bottom = std::max(LONG(std::lround(v.cy * scale)), LONG(MulDiv(180, dpi, 96)));
@@ -990,7 +992,7 @@ void PlaceWindow() {
 void ShowMainWindow() {
     KillTimer(g.hwnd, kShowTimer);
     if (IsWindowVisible(g.hwnd)) return;
-    if (!g.sized) PlaceWindow();
+    if (!g.sized) PlaceWindow(VideoSize());
     ShowWindow(g.hwnd, g.showCmd);
     if (std::exchange(g.subtitlesHint, false)) ShowOsd(L"Subtitles available (S)");
     Wake();
@@ -1472,17 +1474,22 @@ void OnAudioTracks() {
 
 void OnMediaEvent(WPARAM event, LPARAM param) {
     switch (event) {
-        case MF_MEDIA_ENGINE_EVENT_LOADEDMETADATA:
+        case MF_MEDIA_ENGINE_EVENT_LOADEDMETADATA: {
             g.attached = false;  // a new source may bring a new swap chain
             g.duration = Duration();
-            if (!g.sized && HasVideo()) {
-                PlaceWindow();
+            // Sized to the video, unless it already is: again if it showed sooner at a size that turns out wrong.
+            const SIZE v = VideoSize();
+            const bool guessedWrong = g.guessedSize.cx && (v.cx != g.guessedSize.cx || v.cy != g.guessedSize.cy);
+            if (HasVideo() && (!g.sized || guessedWrong)) {
+                PlaceWindow(v);
                 g.sized = true;
             }
+            g.guessedSize = {};
             ShowMainWindow();
             Layout();
             if (g.resume > 0) RequestSeek(std::exchange(g.resume, 0.0), false);  // where it was left
             break;
+        }
         case MF_MEDIA_ENGINE_EVENT_FORMATCHANGE:
             g.attached = false;
             Layout();
@@ -1523,8 +1530,9 @@ void OnMediaEvent(WPARAM event, LPARAM param) {
         case MF_MEDIA_ENGINE_EVENT_ERROR: {
             g.playing = g.seekBusy = g.seekQueued = g.seekCheck = g.seekWaits = false;
             SetThreadExecutionState(ES_CONTINUOUS);
-            // The video given on the command line failed before the window showed: like a failed start, close.
-            const bool starting = !IsWindowVisible(g.hwnd);
+            // The video given on the command line failed before the window showed, or before its metadata loaded
+            // if it showed sooner: like a failed start, close.
+            const bool starting = !IsWindowVisible(g.hwnd) || g.guessedSize.cx;
             KillTimer(g.hwnd, kShowTimer);
             if (g.fullscreen) ToggleFullscreen();  // back to the menu bar, to open another
             ShowVideoError(param);
@@ -1987,7 +1995,16 @@ bool StartPlayer(HINSTANCE instance, const std::vector<std::wstring>& files, int
         DestroyWindow(g.hwnd);
         return false;
     }
-    // The window shows when the video's size is known (LOADEDMETADATA) so it opens at the right size.
+    // The window shows when the video's size is known so it opens at the right size: now, if the source made
+    // ahead tells it, else once the engine does (LOADEDMETADATA).
+    if (const SIZE v = PreparedVideoSize(); v.cx > 0 && v.cy > 0) {
+        PlaceWindow(v);
+        g.sized = true;
+        g.guessedSize = v;
+        ShowMainWindow();
+        Layout();
+        return true;
+    }
     SetTimer(g.hwnd, kShowTimer, kShowFallbackMs, nullptr);
     // Meanwhile, Direct2D and the text formats are set up by drawing the menu bar, which then only redraws.
     DrawMenuBar();

@@ -27,6 +27,9 @@ constexpr UINT WM_APP_AUDIO_TRACKS = WM_APP + 8;
 // Starts what opening the first video, if not empty, needs that can be done before InitPlayer, on threads of its
 // own. Call once, first.
 void PrepareVideo(const std::wstring& path);
+// The first video's size, from what PrepareVideo started, if it has it already; 0 x 0 if not. The engine's
+// VideoSize, once its metadata loads, can differ.
+SIZE PreparedVideoSize();
 // Creates a GPU device of its own, Media Foundation's media engine, which decodes on the GPU, and a thread that
 // presents each new frame into a swap chain for DirectComposition, once per compositor frame. The engine's events
 // are posted to hwnd.

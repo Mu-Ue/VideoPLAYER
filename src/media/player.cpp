@@ -883,6 +883,8 @@ void PrepareVideo(const std::wstring& path) {
     PrepareSourceExtension(path.empty() || IsDevicePath(path) ? nullptr : path.c_str());
 }
 
+SIZE PreparedVideoSize() { return PreparedPictureSize(); }
+
 bool InitPlayer(HWND hwnd) {
     g.notify.hwnd = g.textNotify.hwnd = hwnd;
     if (FAILED(CreateDevice())) return false;
