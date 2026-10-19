@@ -373,7 +373,6 @@ CORE_TEST(window_held_arrows_dont_pile_up_seeks, 40000) {
 CORE_TEST(window_frame_steps_right_after_a_seek, 30000) {
     // Paused at once, before two frames in a row have shown, then a seek: the shortest gap between frames the
     // player has seen is the one across the seek, and a step goes that far.
-    KNOWN_BUG("the time between frames is measured across seeks, so a step soon after opening can leap seconds");
     Start(t::Media(L"clip30.mp4"));
     Pause();
     JumpTo(2.0);

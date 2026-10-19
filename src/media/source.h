@@ -20,6 +20,9 @@ LONGLONG LandedFrameTime(LONGLONG time);
 // Starts making the first file's source on a thread of its own, so its opening doesn't wait on that. path may be
 // null for none; it is opened as a local file. Call once, before the first file.
 void PrepareSourceExtension(const wchar_t* path);
+// How much earlier than Media Foundation's parser of a local file says the engine's source plays its video: its
+// MPEG-4 edit list's start, in 100 ns units. 0 for none, or another format.
+LONGLONG VideoShift(const wchar_t* path);
 // The first file's picture size, as its source made ahead tells, without waiting for that: 0 x 0 until then, or if
 // it has no video.
 SIZE PreparedPictureSize();

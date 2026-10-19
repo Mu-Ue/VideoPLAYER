@@ -136,8 +136,7 @@ CORE_TEST(player_rotated_video_sizes_agree, 30000) {
 }
 
 CORE_TEST(player_sound_only_file, 30000) {
-    // Since the sound plays apart from it, the engine is handed no audio stream, so a file with only sound has nothing it can play.
-    KNOWN_BUG("a file of sound alone fails with SRC_NOT_SUPPORTED since the commit \"Play the sound apart from the media engine\"");
+    // The engine keeps the sound of a file without a picture, which plays apart from it otherwise.
     fx::Start(t::Media(L"audio.m4a"));
     t::PumpUntil([] {
         for (const auto& m : Messages()) {
@@ -356,7 +355,6 @@ CORE_TEST(player_seeks_after_the_last_frame_show_their_frame, 180000) {
 CORE_TEST(player_fast_seeks_land_on_key_frames, 40000) { FastSeeksLandOnKeyFrames(L"gop5s_nob.mp4"); }
 
 CORE_TEST(player_fast_seeks_land_on_key_frames_with_b_frames, 40000) {
-    KNOWN_BUG("MP4 key frame times aren't moved by the edit list's shift, so fast seeks land 2 frames past them");
     FastSeeksLandOnKeyFrames(L"gop5s.mp4");
 }
 

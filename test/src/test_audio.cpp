@@ -172,13 +172,17 @@ double Pitch(const std::vector<float>& s) {
 }
 
 // The player started on a file, with a recorder of its sound; skips if this machine has no sound output.
-std::unique_ptr<Recorder> StartRecording(const std::wstring& file) {
+std::unique_ptr<Recorder> StartRecording(const std::wstring& file, bool picture = true) {
     if (!GetEnvironmentVariableW(L"VIDEOPLAYER_TESTS_AUDIBLE", nullptr, 0)) SKIP("plays tones out loud: run with --audible");
     if (!t::HasAudioOutput()) SKIP("no audio output");
     auto r = std::make_unique<Recorder>();
     if (!r->Start()) SKIP("process loopback recording isn't available");
     fx::Start(t::Media(file));
-    fx::WaitPlaying();
+    if (picture) {
+        fx::WaitPlaying();
+    } else {  // no first frame comes
+        REQUIRE(fx::WaitMedia(MF_MEDIA_ENGINE_EVENT_PLAYING, 10000) >= 0);
+    }
     return r;
 }
 
@@ -240,6 +244,27 @@ CORE_TEST(audio_follows_volume_and_mute, 40000) {
     SetVolume(0);
     t::Pump(200);
     CHECK(Rms(rec->Next(0.5)) < full * 0.01);
+    SetVolume(1);
+    t::Pump(200);
+    CHECK_NEAR(Rms(rec->Next(0.5)) / full, 1.0, 0.06);
+}
+
+CORE_TEST(audio_sound_only_file_plays_and_follows_volume, 30000) {
+    // Its sound plays in the engine, not apart from it like a video's.
+    auto rec = StartRecording(L"audio.m4a", false);
+    SetVolume(1);
+    t::Pump(300);
+    const auto s = rec->Next(0.5);
+    CHECK_EQ(Pitch(s), 440.0);
+    const double full = Rms(s);
+    REQUIRE(full > 1e-4);
+    SetVolume(0.5);
+    t::Pump(200);
+    CHECK_NEAR(Rms(rec->Next(0.5)) / full, 0.5, 0.06);
+    ToggleMute();
+    t::Pump(200);
+    CHECK(Rms(rec->Next(0.5)) < full * 0.01);
+    ToggleMute();
     SetVolume(1);
     t::Pump(200);
     CHECK_NEAR(Rms(rec->Next(0.5)) / full, 1.0, 0.06);

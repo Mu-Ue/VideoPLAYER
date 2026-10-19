@@ -141,8 +141,11 @@ struct {
     bool previewKeyed = false;      // found with keyFrames
     // Where the open file's key frames are, from the previewer's parser of it: openedKeyFrames under previewLock as
     // it opens, keyFrames the window's once taken by KeyFrames. Null if the format doesn't say, or until then.
+    // Their times are the parser's, which ignores an MPEG-4 edit list: later than the engine's by the video's shift,
+    // in 100 ns units, likewise.
     ComPtr<IMFSeekInfo> openedKeyFrames;
     ComPtr<IMFSeekInfo> keyFrames;
+    LONGLONG openedKeyShift = 0, keyShift = 0;
     bool started = false;  // MFStartup succeeded
     // Making the device, which takes long the first time, on a thread of its own from PrepareVideo; and its outcome.
     PTP_WORK deviceWork = nullptr;
@@ -163,6 +166,7 @@ struct {
     std::atomic<bool> redraw = false;  // present the current frame even if it isn't new; set with Redraw
     std::atomic<bool> frameWanted = false;  // post WM_APP_FRAME before the next frame; set with RequestFrame
     std::atomic<LONGLONG> landing = -1;     // of the last seek, in 100 ns units, until its frame shows
+    std::atomic<UINT> seeks = 0;            // made yet, so the time between frames isn't measured across one
     std::atomic<bool> opened = false;       // a new video was opened, whose frames may come faster
     std::atomic<double> rate = 1;           // the playback speed, which video time passes at
     // The time of the frame on screen and the shortest time between frames yet, in 100 ns units; -1 and 0 if none.
@@ -488,7 +492,8 @@ void RenderLoop() {
     ReleaseSRWLockExclusive(&g.lock);
     LONGLONG frameTime = -1;  // of the frame on screen
     LONGLONG fastest = 0;     // the shortest time between frames of the video yet, or 0
-    LONGLONG previous = -1;   // the video's last frame, for that
+    LONGLONG previous = -1;   // the video's last frame, for that, unless a seek came since
+    UINT seeks = 0;           // the seeks made as it showed
     for (;;) {
         if (g.opened.exchange(false)) {
             fastest = 0, previous = -1;
@@ -529,8 +534,11 @@ void RenderLoop() {
             // The engine gives the frame a seek lands on as at the seek's time, which can be past the frame's own
             // time, and so past a cue's end.
             LONGLONG landing = g.landing;
+            const UINT seeksNow = g.seeks;
+            if (seeksNow != seeks) previous = -1, seeks = seeksNow;
             if (landing >= 0 && std::abs(pts - landing) <= 1 && g.landing.compare_exchange_strong(landing, -1)) {
                 pts = LandedFrameTime(pts);
+                previous = -1;  // a frame shown before the seek could still have come after it was made
             }
             if (previous >= 0 && pts > previous && (!fastest || pts - previous < fastest)) fastest = pts - previous;
             frameTime = previous = pts;
@@ -579,6 +587,7 @@ IMFSeekInfo* KeyFrames() {
     if (!g.keyFrames) {
         AcquireSRWLockShared(&g.previewLock);
         g.keyFrames = g.openedKeyFrames;
+        g.keyShift = g.openedKeyShift;
         ReleaseSRWLockShared(&g.previewLock);
     }
     return g.keyFrames.Get();
@@ -613,6 +622,16 @@ std::wstring Take(LPWSTR text) {
     std::wstring s = text ? text : L"";
     CoTaskMemFree(text);
     return s;
+}
+
+// The volume, to the player's sound and to the engine's, which is a file's without a picture; the engine's goes to
+// full volume at most.
+void ApplyVolume() {
+    SetAudioVolume(g.volume, g.muted);
+    if (g.engine) {
+        g.engine->SetVolume(std::min(g.volume, 1.0));
+        g.engine->SetMuted(g.muted);
+    }
 }
 
 // The sound's clock: where the picture is, and whether it moves on.
@@ -840,8 +859,12 @@ void PreviewLoop() {
             if (std::vector<LONGLONG> times; !keyFrames && !(times = MkvKeyFrames(path.c_str())).empty()) {
                 keyFrames.Attach(new (std::nothrow) KeyFrameList(std::move(times)));
             }
+            const LONGLONG shift = keyFrames ? VideoShift(path.c_str()) : 0;
             AcquireSRWLockExclusive(&g.previewLock);
-            if (g.previewPath.empty()) g.openedKeyFrames = std::move(keyFrames);  // else another file is waiting
+            if (g.previewPath.empty()) {  // else another file is waiting
+                g.openedKeyFrames = std::move(keyFrames);
+                g.openedKeyShift = shift;
+            }
             g.previewWidth = decodes ? w : 0;  // audio only, or a format it can't shrink: no previews
             g.previewHeight = decodes ? h : 0;
             ReleaseSRWLockExclusive(&g.previewLock);
@@ -903,7 +926,7 @@ bool InitPlayer(HWND hwnd) {
     g.started = SUCCEEDED(MFStartup(MF_VERSION, MFSTARTUP_LITE));
     if (!g.started || FAILED(CreateEngines())) return false;
     StartAudio(PictureTime, hwnd, WM_APP_AUDIO_TRACKS);
-    SetAudioVolume(g.volume, g.muted);
+    ApplyVolume();
     g.stop = CreateEventW(nullptr, TRUE, FALSE, nullptr);
     g.previewWake = CreateEventW(nullptr, FALSE, FALSE, nullptr);
     g.renderWake = g.notify.wake = CreateEventW(nullptr, FALSE, FALSE, nullptr);
@@ -1027,7 +1050,22 @@ bool HasVideo() { return g.engine && g.engine->HasVideo(); }
 
 std::vector<Track> AudioTracks() { return AudioTrackList(); }
 
-void SelectAudioTrack(size_t index) { SelectAudio(index); }
+void SelectAudioTrack(size_t index) {
+    SelectAudio(index);
+    // A file without a picture plays its sound in the engine: its audio streams in turn are the tracks.
+    DWORD count = 0;
+    if (!g.engine || g.engine->HasVideo() || FAILED(g.engine->GetNumberOfStreams(&count))) return;
+    size_t track = 0;
+    for (DWORD i = 0; i < count; ++i) {
+        PROPVARIANT type;
+        PropVariantInit(&type);
+        const bool audio = SUCCEEDED(g.engine->GetStreamAttribute(i, MF_MT_MAJOR_TYPE, &type)) &&
+                           type.vt == VT_CLSID && type.puuid && *type.puuid == MFMediaType_Audio;
+        PropVariantClear(&type);
+        if (audio) g.engine->SetStreamSelection(i, track++ == index);
+    }
+    g.engine->ApplyStreamSelections();
+}
 
 std::vector<Track> SubtitleTracks() {
     std::vector<Track> tracks;
@@ -1121,14 +1159,18 @@ double PlaybackTime() { return g.engine ? g.engine->GetCurrentTime() : 0; }
 double Duration() { return g.engine ? g.engine->GetDuration() : NAN; }
 
 // The engine's approximate seek still decodes from a key frame up to near the target, a frame at a time, so a fast
-// seek goes exactly to a key frame instead (just past it, so rounding can't land a frame early).
+// seek goes exactly to a key frame instead (just past it, so rounding can't land a frame early), in the engine's
+// times.
 double SeekLanding(double seconds, bool fast) {
     IMFSeekInfo* keyFrames = fast ? KeyFrames() : nullptr;
-    return keyFrames ? NearestKeyFrame(keyFrames, seconds) + 0.0005 : seconds;
+    if (!keyFrames) return seconds;
+    const double shift = g.keyShift / 1e7;
+    return NearestKeyFrame(keyFrames, seconds + shift) - shift + 0.0005;
 }
 
 void SeekTo(double landing, bool fast) {
     g.landing = std::llround(landing * 1e7);
+    ++g.seeks;
     g.engine->SetCurrentTimeEx(landing, fast && !KeyFrames() ? MF_MEDIA_ENGINE_SEEK_MODE_APPROXIMATE
                                                              : MF_MEDIA_ENGINE_SEEK_MODE_NORMAL);
 }
@@ -1157,21 +1199,21 @@ namespace {
 
 void SetMuted(bool muted) {
     g.muted = muted;
-    SetAudioVolume(g.volume, g.muted);
+    ApplyVolume();
 }
 
 }  // namespace
 
 double ChangeVolume(double delta) {
     g.volume = std::clamp(std::round((g.volume + delta) * 100) / 100, 0.0, kMaxVolume);
-    SetAudioVolume(g.volume, g.muted);
+    ApplyVolume();
     if (delta > 0) SetMuted(false);
     return g.volume;
 }
 
 double SetVolume(double volume) {
     g.volume = std::clamp(std::round(volume * 100) / 100, 0.0, kMaxVolume);
-    SetAudioVolume(g.volume, g.muted);
+    ApplyVolume();
     if (g.volume > 0) SetMuted(false);
     return g.volume;
 }

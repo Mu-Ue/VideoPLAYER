@@ -450,6 +450,8 @@ std::wstring Take(LPWSTR text) {
 
 // Media Foundation's own source for the file, with the tracks' samples moved earlier. The engine doesn't see the
 // sound: one audio track is read along with the picture, but its stream goes to the player, which plays it apart.
+// A file without a picture keeps its sound for the engine, which has nothing else to play; the player chooses its
+// track through the engine.
 class ShiftedSource final : public Relay<IMFMediaSourceEx>, public IMFGetService {
   public:
     ShiftedSource(IMFMediaSource* inner, const Shifts& shifts, const wchar_t* url)
@@ -467,9 +469,12 @@ class ShiftedSource final : public Relay<IMFMediaSourceEx>, public IMFGetService
             ComPtr<IMFStreamDescriptor> descriptor;
             DWORD id;
             if (FAILED(presentation->GetStreamDescriptorByIndex(i, &selected, &descriptor)) ||
-                FAILED(descriptor->GetStreamIdentifier(&id)) || MajorType(descriptor.Get()) != MFMediaType_Audio) {
+                FAILED(descriptor->GetStreamIdentifier(&id))) {
                 continue;
             }
+            const GUID major = MajorType(descriptor.Get());
+            if (major == MFMediaType_Video) picture_ = true;
+            if (major != MFMediaType_Audio) continue;
             LPWSTR language = nullptr, name = nullptr;
             descriptor->GetAllocatedString(MF_SD_LANGUAGE, &language, nullptr);
             descriptor->GetAllocatedString(MF_SD_STREAM_NAME, &name, nullptr);
@@ -496,7 +501,7 @@ class ShiftedSource final : public Relay<IMFMediaSourceEx>, public IMFGetService
     }
     STDMETHODIMP CreatePresentationDescriptor(IMFPresentationDescriptor** descriptor) override {
         HRESULT hr = inner_->CreatePresentationDescriptor(descriptor);
-        if (SUCCEEDED(hr)) ChooseAudio(*descriptor, -1);
+        if (SUCCEEDED(hr) && picture_) ChooseAudio(*descriptor, -1);
         return hr;
     }
     // Starts the engine's streams and the audio track the player asks for, which it changes on a seek, not on
@@ -508,7 +513,7 @@ class ShiftedSource final : public Relay<IMFMediaSourceEx>, public IMFGetService
             track_ = AudioTrackToRead(sound_);
         }
         ComPtr<IMFPresentationDescriptor> started;
-        if (descriptor && SUCCEEDED(descriptor->Clone(&started))) ChooseAudio(started.Get(), track_);
+        if (picture_ && descriptor && SUCCEEDED(descriptor->Clone(&started))) ChooseAudio(started.Get(), track_);
         return inner_->Start(started ? started.Get() : descriptor, format, at);
     }
     STDMETHODIMP Stop() override { return inner_->Stop(); }
@@ -579,7 +584,7 @@ class ShiftedSource final : public Relay<IMFMediaSourceEx>, public IMFGetService
             SUCCEEDED(value.punkVal->QueryInterface(IID_PPV_ARGS(&inner)))) {
             bool audio = false;
             ComPtr<ShiftedStream> stream = Wrap(inner.Get(), audio);
-            if (audio) {
+            if (audio && picture_) {
                 if (stream) SetAudioStream(sound_, stream.Get());
                 PropVariantClear(&value);
                 return false;
@@ -637,6 +642,7 @@ class ShiftedSource final : public Relay<IMFMediaSourceEx>, public IMFGetService
     const LONGLONG video_;
     std::vector<DWORD> audioIds_;                    // each audio track's stream id
     std::vector<std::pair<DWORD, LONGLONG>> audio_;  // each audio stream's id and own shift
+    bool picture_ = false;                           // the file has a video track
     UINT sound_ = 0;                                 // the player's id for this source's sound
     int track_ = -1;                                 // the audio track read, or -1
     std::atomic<LONGLONG> start_ = 0;               // where playback last started
@@ -659,6 +665,19 @@ Shifts ReadShifts(const wchar_t* url, IMFByteStream* stream) {
     stream->SetCurrentPosition(0);
     return shifts;
 }
+
+}  // namespace
+
+LONGLONG VideoShift(const wchar_t* path) {
+    ComPtr<IMFByteStream> stream;
+    if (!HasExtension(path, {L".mp4", L".m4v", L".mov"}) ||
+        FAILED(MFCreateFile(MF_ACCESSMODE_READ, MF_OPENMODE_FAIL_IF_NOT_EXIST, MF_FILEFLAGS_NONE, path, &stream))) {
+        return 0;
+    }
+    return ReadMp4Shifts(stream.Get()).video;
+}
+
+namespace {
 
 // Wraps the source made for the engine and hands it over through the engine's callback; on failure, hands over
 // the failure.
